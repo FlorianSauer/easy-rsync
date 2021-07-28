@@ -1,0 +1,4 @@
+# example exclude file.
+file1.txt
+dir1/*
+dir2
