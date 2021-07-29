@@ -5,7 +5,7 @@ import subprocess
 import sys
 from collections import OrderedDict
 from os import getcwd, makedirs
-from os.path import normpath, abspath, exists
+from os.path import normpath, abspath, exists, expandvars
 from typing import List, Dict, Optional
 
 
@@ -26,8 +26,8 @@ class Host(object):
 
 
 class Folder(object):
-    def __init__(self, ref_name, src, dst, host, upload, rsync_args, exclude, exclude_from, work_dir):
-        # type: (str, str, str, Optional[Host], bool, str, List[str], List[str], str) -> None
+    def __init__(self, ref_name, src, dst, host, upload, rsync_args, exclude, exclude_from, work_dir, enabled):
+        # type: (str, str, str, Optional[Host], bool, str, List[str], List[str], str, bool) -> None
         self.ref_name = ref_name
         self.src = src
         self.dst = dst
@@ -37,6 +37,15 @@ class Folder(object):
         self.exclude = exclude
         self.exclude_from = exclude_from
         self.work_dir = work_dir
+        self.enabled = enabled
+
+
+class EnvInterpolation(configparser.BasicInterpolation):
+    """Interpolation which expands environment variables in values."""
+
+    def before_get(self, parser, section, option, value, defaults):
+        value = super().before_get(parser, section, option, value, defaults)
+        return expandvars(value)
 
 
 class EasyRsync(object):
@@ -78,7 +87,9 @@ class EasyRsync(object):
 
     def ini_config(self, config):
         # type: (Config) -> Config
-        parser = configparser.ConfigParser(converters={'list': lambda x: [i.strip() for i in x.split(',')]})
+        parser = configparser.ConfigParser(interpolation=EnvInterpolation(),
+                                           converters={'list': lambda x: [i.strip() for i in x.split(',')]}
+                                           )
         parser.read(config.config_path)
 
         # parse hosts into config
@@ -109,10 +120,10 @@ class EasyRsync(object):
             if not parser.has_option(section, 'dst'):
                 print("Option '{}' missing in Section '{}'".format('dst', section), file=sys.stderr)
                 continue
-            if not parser.has_option(section, 'direction'):
-                print("Option '{}' missing in Section '{}'".format('direction', section), file=sys.stderr)
-                continue
             if parser.has_option(section, 'host'):
+                if not parser.has_option(section, 'direction'):
+                    print("Option '{}' missing in Section '{}'".format('direction', section), file=sys.stderr)
+                    continue
                 host_ref_name = parser.get(section, 'host')
                 if host_ref_name not in config.hosts:
                     print("Option '{}' in Section '{}' uses an unknown Host '{}'".format(
@@ -123,7 +134,9 @@ class EasyRsync(object):
             else:
                 host = None
 
-            if parser.get(section, 'direction').lower() in ('u', 'up', 'upload'):
+            if host is None:
+                upload = True
+            elif parser.get(section, 'direction').lower() in ('u', 'up', 'upload'):
                 upload = True
             elif parser.get(section, 'direction').lower() in ('d', 'down', 'download'):
                 upload = False
@@ -133,7 +146,7 @@ class EasyRsync(object):
                     file=sys.stderr)
                 continue
             else:
-                upload = True
+                raise NotImplementedError
 
             if parser.has_option(section, 'rsync_args'):
                 rsync_args = parser.get(section, 'rsync_args')
@@ -159,9 +172,7 @@ class EasyRsync(object):
 
             ref_name = section[len(self.FOLDER_SECTION_NAME):]
 
-            if not parser.getboolean(section, 'enabled', fallback=True):
-                print('Skipping disabled Folder {}'.format(ref_name), file=sys.stderr)
-                continue
+            enabled = parser.getboolean(section, 'enabled', fallback=True)
 
             folder = Folder(ref_name=ref_name,
                             src=parser.get(section, 'src'),
@@ -171,7 +182,8 @@ class EasyRsync(object):
                             rsync_args=rsync_args,
                             exclude=exclude,
                             exclude_from=exclude_from,
-                            work_dir=work_dir)
+                            work_dir=work_dir,
+                            enabled=enabled)
             config.folders[ref_name] = folder
 
         # print error for all other sections
@@ -224,6 +236,10 @@ class EasyRsync(object):
                           if arguments]
         command = 'rsync ' + ' '.join(arguments_list)
         print('using rsync command:', command, file=sys.stderr)
+
+        if not folder.enabled:
+            print('Folder is disabled, skipping rsync execution', file=sys.stderr)
+            return True
 
         rsync_subprocess = subprocess.Popen(args=command, shell=True, cwd=folder.work_dir)
         rsync_subprocess.wait()
