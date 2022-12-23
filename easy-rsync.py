@@ -9,13 +9,6 @@ from os.path import normpath, abspath, exists, expandvars
 from typing import List, Dict, Optional
 
 
-class Config(object):
-    config_path = None  # type: str
-    hosts = OrderedDict()  # type: Dict[str, Host]
-    folders = OrderedDict()  # type: Dict[str, Folder]
-    global_rsync_args = None  # type: str
-
-
 class Host(object):
     def __init__(self, ref_name, host, user, port):
         # type: (str, str, Optional[str], Optional[int]) -> None
@@ -40,6 +33,13 @@ class Folder(object):
         self.enabled = enabled
 
 
+class Config(object):
+    config_path = None  # type: str
+    hosts = OrderedDict()  # type: Dict[str, Host]
+    folders = OrderedDict()  # type: Dict[str, Folder]
+    global_rsync_args = None  # type: str
+
+
 class EnvInterpolation(configparser.BasicInterpolation):
     """Interpolation which expands environment variables in values."""
 
@@ -57,6 +57,9 @@ class EasyRsync(object):
 
         # iterate folders
         for folder_ref_name, folder in runtime_config.folders.items():
+            if not folder.enabled:
+                print('Section {} is disabled, skipping rsync execution'.format(folder_ref_name), file=sys.stderr)
+                continue
             print('Starting rsync for Section {}'.format(folder_ref_name), file=sys.stderr)
             if self.rsync_folder(folder, runtime_config):
                 print('rsync for Section {} finished successfully'.format(folder_ref_name), file=sys.stderr)
@@ -236,10 +239,6 @@ class EasyRsync(object):
                           if arguments]
         command = 'rsync ' + ' '.join(arguments_list)
         print('using rsync command:', command, file=sys.stderr)
-
-        if not folder.enabled:
-            print('Folder is disabled, skipping rsync execution', file=sys.stderr)
-            return True
 
         rsync_subprocess = subprocess.Popen(args=command, shell=True, cwd=folder.work_dir)
         rsync_subprocess.wait()
